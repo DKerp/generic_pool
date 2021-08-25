@@ -263,6 +263,14 @@ pub struct Pool {
     inner: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
 }
 
+impl Clone for Pool {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Rc::clone(&self.inner),
+        }
+    }
+}
+
 impl Pool {
     pub fn get_config<T: Any>(&self) -> PoolConfig {
         self.inner.borrow().get_config::<T>()
