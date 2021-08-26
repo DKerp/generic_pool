@@ -167,10 +167,10 @@ pub struct DropGuard<T: Any> {
 }
 
 impl<T: Any> DropGuard<T> {
-    /// Creates a new DropGuard from an abritrary object and adds the reference to a regular pool.
-    fn new(obj: T, pool: &Rc<RefCell<PoolInner<Box<dyn Any>>>>) -> Self {
+    /// Creates a new [`DropGuard`] from an abritrary object and adds the reference to a regular [`Pool`].
+    pub fn new(obj: T, pool: &Pool) -> Self {
         let inner = Some(obj);
-        let pool = Rc::clone(pool);
+        let pool = Rc::clone(&pool.inner);
         Self {
             inner,
             pool,
@@ -229,10 +229,10 @@ pub struct SyncDropGuard<T: Any + Send + Sync> {
 }
 
 impl<T: Any + Send + Sync> SyncDropGuard<T> {
-    /// Creates a new DropGuard from an abritrary object and adds the reference to a sync pool.
-    fn new(obj: T, pool: &Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>) -> Self {
+    /// Creates a new [`DropGuard`] from an abritrary object and adds the reference to a [`SyncPool`].
+    pub fn new(obj: T, pool: &SyncPool) -> Self {
         let inner = Some(obj);
-        let pool = Arc::clone(pool);
+        let pool = Arc::clone(&pool.inner);
         Self {
             inner,
             pool,
@@ -364,7 +364,7 @@ impl<B> PoolInner<B> {
 /// A pool that allows storing abritrary objects.
 #[derive(Default)]
 pub struct Pool {
-    inner: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
+    pub(crate) inner: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
 }
 
 /// The cloned [`Pool`] will still point to the same instance.
@@ -381,7 +381,7 @@ impl Pool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
     ///     // Use a non-default config.
@@ -412,7 +412,7 @@ impl Pool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
     ///     let mut pool = Pool::default();
@@ -443,7 +443,7 @@ impl Pool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
     ///     // Use a non-default config.
@@ -468,7 +468,7 @@ impl Pool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
     ///     let mut pool = Pool::default();
@@ -521,7 +521,7 @@ impl Pool {
 
     pub fn get_with_guard<T: Any>(&mut self) -> Option<DropGuard<T>> {
         match self.get::<T>() {
-            Some(obj) => Some(DropGuard::new(obj, &self.inner)),
+            Some(obj) => Some(DropGuard::new(obj, self)),
             None => None,
         }
     }
@@ -529,7 +529,7 @@ impl Pool {
     pub fn get_or_default_with_guard<T: Any + Default>(&mut self) -> DropGuard<T> {
         let obj = self.get_or_default::<T>();
 
-        DropGuard::new(obj, &self.inner)
+        DropGuard::new(obj, self)
     }
 
     pub fn put<T: Any>(&mut self, obj: T) {
@@ -542,7 +542,7 @@ impl Pool {
 /// A thread-safe pool that allows storing abritrary objects.
 #[derive(Default)]
 pub struct SyncPool {
-    inner: Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>,
+    pub(crate) inner: Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>,
 }
 
 /// The cloned [`SyncPool`] will still point to the same instance.
@@ -559,7 +559,7 @@ impl SyncPool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
     ///     // Use a non-default config.
@@ -571,7 +571,7 @@ impl SyncPool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = SyncPool::with_default_config(config); // NOTE Config implements Copy.
     ///
     ///     assert_eq!(config, pool.get_default_config());
     /// }
@@ -590,7 +590,7 @@ impl SyncPool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::SyncPool;
+    /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
     ///     let mut pool = SyncPool::default();
@@ -622,7 +622,7 @@ impl SyncPool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::Pool;
+    /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
     ///     // Use a non-default config.
@@ -634,7 +634,7 @@ impl SyncPool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = SyncPool::with_default_config(config); // NOTE Config implements Copy.
     ///
     ///     assert_eq!(config, pool.get_default_config());
     /// }
@@ -648,7 +648,7 @@ impl SyncPool {
     ///
     /// # Example
     /// ```rust
-    /// use generic_pool::SyncPool;
+    /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
     ///     let mut pool = SyncPool::default();
@@ -704,7 +704,7 @@ impl SyncPool {
 
     pub fn get_with_guard<T: Any + Send + Sync>(&mut self) -> Option<SyncDropGuard<T>> {
         match self.get::<T>() {
-            Some(obj) => Some(SyncDropGuard::new(obj, &self.inner)),
+            Some(obj) => Some(SyncDropGuard::new(obj, self)),
             None => None,
         }
     }
@@ -712,7 +712,7 @@ impl SyncPool {
     pub fn get_or_default_with_guard<T: Any + Send + Sync + Default>(&mut self) -> SyncDropGuard<T> {
         let obj = self.get_or_default::<T>();
 
-        SyncDropGuard::new(obj, &self.inner)
+        SyncDropGuard::new(obj, self)
     }
 
     pub fn put<T: Any + Send + Sync>(&self, obj: T) {
