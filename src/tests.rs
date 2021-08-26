@@ -15,6 +15,24 @@ struct Animal {
 }
 
 
+/// A local trait providing the reset logic for all recycled objects.
+trait Reset {
+    fn reset(self) -> Self; // See below why we use this pattern.
+}
+
+/// We implement the trait on any drop guard by this.
+impl<G: AsMut<Animal>> Reset for G {
+    fn reset(mut self) -> Self {
+        let animal = self.as_mut();
+        animal.home = false;
+        animal.name.clear();
+        animal.age_in_month = 0;
+
+        self
+    }
+}
+
+
 #[test]
 fn simple_get() {
     let mut pool = Pool::default();
@@ -81,4 +99,25 @@ fn get_with_guard() {
 
     assert_eq!(pool.get::<Person>(), None);
     assert_eq!(pool.get::<Animal>(), None);
+}
+
+#[test]
+fn get_with_guard_and_costum_reset() {
+    let mut pool = Pool::default();
+
+    let a = Animal {
+        home: true,
+        name: String::from("Meow"),
+        age_in_month: 12,
+    };
+
+    pool.put(a.clone());
+
+    let animal: DropGuard<Animal> = match pool.get_with_guard() {
+        Some(animal) => Reset::reset(animal),
+        None => panic!("No animal retrieved."),
+    };
+
+    assert_ne!(*animal, a);
+    assert_eq!(*animal, Animal::default());
 }
