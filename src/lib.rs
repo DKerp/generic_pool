@@ -16,7 +16,7 @@
 //! - Each configuration option can be set for each object type individually.
 //! - You can also set the default configuration for object types for which no constum configuration was set.
 //! - Provides optional auto-creation of objects which implement the [`Default`](https://doc.rust-lang.org/std/default/trait.Default.html) trait.
-//! - Offers cheap [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html)ing, so you can easily use the same pool in many places.
+//! - Offers cheap [`Clon`](https://doc.rust-lang.org/std/clone/trait.Clone.html)ing, so you can easily use the same pool in many places.
 //!
 //! ## A quick example
 //!
@@ -70,6 +70,176 @@
 //!     // E.g.: person.reset()
 //! }
 //! ```
+//! ## Security
+//!
+//! The pool does not modify the objects it receives or gives out in any way, and does thus in particular not reset objects properly.
+//! __It is your responsibility to reset objects as appropriate either before adding them back to the store, or after receiving them.__
+//! Otherwise you will likely open up security holes by accidentaly using data from earlier operations.
+//!
+//! ### A common bad example
+//!
+//! Many frontend APIs do also provide priviledged access if they receive the proper credentials. Depending on the implementation the admin flag
+//! might only get explicitly set if some special credentials are send over. Without resetting the admin flag of recycled request objects this can
+//! open up a big security hole.
+//!
+//! ```ignore
+//! use generic_pool::Pool;
+//!
+//! struct FrontendRequest {
+//!     admin_credentials: Option<String>,
+//!     commands: Vec<String>,
+//! }
+//!
+//! #[derive(Default)]
+//! struct BackendRequest {
+//!     is_admin: bool,
+//!     commands: Vec<Command>,
+//! }
+//!
+//! fn main() {
+//!     let mut pool = Pool::default();
+//!
+//!     /* initialize API... */
+//!
+//!     loop {
+//!         // Retrieve a frontend request.
+//!         let frontend_req: FrontendRequest = get_frontend_req();
+//!
+//!         // Retrieve a recycled backend request object from the pool.
+//!         let mut backend_req = pool::get_or_default_with_guard::<BackendRequest>();
+//!
+//!         /* HAZARD - The backend request object might still contain older commands. */
+//!
+//!         // Parse the commands and check if they are known and valid.
+//!         for cmd in frountend_req.commands.iter() {
+//!             match parse_cmd(cmd) {
+//!                 Ok(parsed_cmd) => backend_req.commands.push(parsed_cmd),
+//!                 Err(err) => return_error_to_client_and_abort(err),
+//!             }
+//!         }
+//!
+//!         /* HAZARD - the backend request might still have the admin flag set!!! */
+//!
+//!         if let Some(credentials) = &frontend_req.admin_credentials {
+//!             match check_admin_credentials(credentials) {
+//!                 Ok(_) => backend_req.is_admin = true,
+//!                 Err(err) => return_error_to_client_and_abort(err),
+//!             }
+//!         }
+//!
+//!         // The backend might now receive unintended commands or even commands
+//!         // from unpriviledged users with the admin flag set.
+//!         send_backend_request(backend_req);
+//!
+//!         // NOTE: The drop guard of the backend request will put it back into the pool now.
+//!     }
+//! }
+//! ```
+//!
+//! ### The solution
+//!
+//! Of course a simple solution would be the implement the whole parsing and checking process in such a way that all fields of any recycled object get always filled
+//! with entirely new data, but this might not always be favorable. It can be difficult to check that all fields from all objects you recycle are overwritten before being used.
+//!
+//! The most secure solution is thus to write some explicit resetting logic for all objects you use and to make sure it gets called whenever you retrieve an object
+//! from the pool.
+//!
+//! ```ignore
+//! use generic_pool::{Pool, DropGuard};
+//!
+//! /// A local trait providing the reset logic for all recycled objects.
+//! trait Reset {
+//!     fn reset(self) -> Self; // See below why we use this pattern.
+//! }
+//!
+//! struct FrontendRequest {
+//!     admin_credentials: Option<String>,
+//!     commands: Vec<String>,
+//! }
+//!
+//! #[derive(Default)]
+//! struct BackendRequest {
+//!     is_admin: bool,
+//!     commands: Vec<Command>,
+//! }
+//!
+//! // We implement the trait on any drop guard by this.
+//! impl<G: AsMut<BackendRequest>> Reset for G {
+//!     fn reset(mut self) -> Self {
+//!         let req = self.as_mut();
+//!         req.is_admin = false;
+//!         req.commands.clear();
+//!
+//!         self
+//!     }
+//! }
+//!
+//! fn main() {
+//!     let mut pool = Pool::default();
+//!
+//!     /* initialize API... */
+//!
+//!     loop {
+//!         // Retrieve a frontend request.
+//!         let frontend_req: FrontendRequest = get_frontend_req();
+//!
+//!         // Retrieve a recycled backend request object from the pool.
+//!         let mut backend_req = match pool::get_with_guard::<BackendRequest>() {
+//!             Some(req) => req.reset(), // Is an expression, gives back req
+//!             None => DropGuard::new(BackendRequest::default(), &pool), // No need to reset
+//!         };
+//!
+//!         /* We can proceed safely now */
+//!     }
+//! }
+//! ```
+//!
+//! ## Configuration
+//!
+//! You can configure the maximum size of the stores internal buffers, as well as their initial size and the rate at which the capacity increases.
+//! These settings always apply to a specific type of object beeing stored in the pool, and never at
+//! the pool as a whole. That is if you store e.g. 2 different object types and configure a default
+//! maximum capacity of __1_000__, the pool will store up to __2_000__ objects. The settings are intended for limiting the memory usage of the pool.
+//!
+//! The pools active default configuration will apply to all object types until you set a custom one for an object type. If you do not specify a costum
+//! default config for the pool, the pool will use the default values for [`Config`].
+//!
+//! ### Example
+//!
+//! ```rust
+//! use generic_pool::{Pool, Config};
+//!
+//! fn main() {
+//!     // Use a non-default config.
+//!     let config = Config {
+//!         max: 1_000,
+//!         step: 100,
+//!         start: 500,
+//!     };
+//!
+//!     assert_ne!(config, Config::default());
+//!
+//!     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+//!
+//!     // Alternative:
+//!     // let mut pool = Pool::default();
+//!     // pool.set_default_config(config);
+//!
+//!     assert_eq!(config, pool.get_default_config());
+//!     assert_eq!(config, pool.get_config::<Vec<u8>>());
+//!
+//!     // Create a costum config for `Vec<u8>`.
+//!     let custom_config = Config {
+//!         max: 100,
+//!         step: 10,
+//!         start: 10,
+//!     };
+//!
+//!     pool.set_config::<Vec<u8>>(custom_config);
+//!
+//!     assert_eq!(custom_config, pool.get_config::<Vec<u8>>());
+//! }
+//! ```
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::rc::Rc;
@@ -87,7 +257,12 @@ mod tests;
 /// The configuration options of the pools internal store.
 ///
 /// The settings always apply to a specific type of object beeing stored in the pool, and never at
-/// the pool as a whole. The settings are intended for limiting the memory usage of the pool.
+/// the pool as a whole. That is if you store e.g. 2 different object types and configure a default
+/// maximum capacity of __1_000__, the pool will store up to __2_000__ objects.
+/// The settings are intended for limiting the memory usage of the pool.
+///
+/// The pools active default configuration will apply to all object types until you set a custom one for an object type.
+/// If you do not specify a costum default config for the pool, the pool will use the default values for [`Config`].
 ///
 /// We allow setting a [`max`](#structfield.max) capacity of the internal pool buffer. If the buffer is full
 /// and another object gets added to the pool, the new object will get dropped.
@@ -97,6 +272,43 @@ mod tests;
 /// [`max`](#structfield.max) value, the [`step`](#structfield.step) value is used to determine by which amount
 /// the capacity should be increased. Note that it will use a lower value then [`step`](#structfield.step)
 /// if otherwise the capacity would exceed the [`max`](#structfield.max) value.
+///
+/// # Example
+///
+/// ```rust
+/// use generic_pool::{Pool, Config};
+///
+/// fn main() {
+///     // Use a non-default config.
+///     let config = Config {
+///         max: 1_000,
+///         step: 100,
+///         start: 500,
+///     };
+///
+///     assert_ne!(config, Config::default());
+///
+///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+///
+///     // Alternative:
+///     // let mut pool = Pool::default();
+///     // pool.set_default_config(config);
+///
+///     assert_eq!(config, pool.get_default_config());
+///     assert_eq!(config, pool.get_config::<Vec<u8>>());
+///
+///     // Create a costum config for `Vec<u8>`.
+///     let custom_config = Config {
+///         max: 100,
+///         step: 10,
+///         start: 10,
+///     };
+///
+///     pool.set_config::<Vec<u8>>(custom_config);
+///
+///     assert_eq!(custom_config, pool.get_config::<Vec<u8>>());
+/// }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
     /// The maximum number of elements of a specific type to be hold inside the pool.
