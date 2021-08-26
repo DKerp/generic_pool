@@ -1,5 +1,11 @@
 [package]
-name = "generic_pool"
+name = "generic-pool"
+description = "A pool for recycling allocated objects for later reuse. Uses generic get/put methods so you can store (almost) any type in a single pool instance. "
 version = "0.1.0"
-authors = ["anonymous"]
+authors = ["Denis Kerp"]
 edition = "2018"
+readme = "README.md"
+repository = "https://github.com/DKerp/generic_pool"
+license = "MIT"
+keywords = ["pool", "pooling", "memory", "generics"]
+categories = ["memory-management"]

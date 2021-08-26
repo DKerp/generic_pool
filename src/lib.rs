@@ -14,7 +14,7 @@
 //! - Allows configuring the maximum number of stored objects to prevent RAM exhaustion.
 //! - Allows configuring the rate at which the internal capacity gets increased over time.
 //! - Each configuration option can be set for each object type individually.
-//! - You can also set the default configuration for object types for which no constum configuration was set.
+//! - You can also set a fallback configuration for object types for which no constum configuration was set.
 //! - Provides optional auto-creation of objects which implement the [`Default`](https://doc.rust-lang.org/std/default/trait.Default.html) trait.
 //! - Offers cheap [`Clon`](https://doc.rust-lang.org/std/clone/trait.Clone.html)ing, so you can easily use the same pool in many places.
 //!
@@ -106,7 +106,7 @@
 //!         let frontend_req: FrontendRequest = get_frontend_req();
 //!
 //!         // Retrieve a recycled backend request object from the pool.
-//!         let mut backend_req = pool::get_or_default_with_guard::<BackendRequest>();
+//!         let mut backend_req = pool.get_or_default_with_guard::<BackendRequest>();
 //!
 //!         /* HAZARD - The backend request object might still contain older commands. */
 //!
@@ -184,7 +184,7 @@
 //!         let frontend_req: FrontendRequest = get_frontend_req();
 //!
 //!         // Retrieve a recycled backend request object from the pool.
-//!         let mut backend_req = match pool::get_with_guard::<BackendRequest>() {
+//!         let mut backend_req = match pool.get_with_guard::<BackendRequest>() {
 //!             Some(req) => req.reset(), // Is an expression, gives back req
 //!             None => DropGuard::new(BackendRequest::default(), &pool), // No need to reset
 //!         };
@@ -201,8 +201,8 @@
 //! the pool as a whole. That is if you store e.g. 2 different object types and configure a default
 //! maximum capacity of __1_000__, the pool will store up to __2_000__ objects. The settings are intended for limiting the memory usage of the pool.
 //!
-//! The pools active default configuration will apply to all object types until you set a custom one for an object type. If you do not specify a costum
-//! default config for the pool, the pool will use the default values for [`Config`].
+//! The pools fallback configuration will apply to all object types until you set a custom one for an object type. If you do not specify a costum
+//! fallback config for the pool, the pool will use the default values for [`Config`].
 //!
 //! ### Example
 //!
@@ -219,13 +219,13 @@
 //!
 //!     assert_ne!(config, Config::default());
 //!
-//!     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+//!     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
 //!
 //!     // Alternative:
 //!     // let mut pool = Pool::default();
-//!     // pool.set_default_config(config);
+//!     // pool.set_fallback_config(config);
 //!
-//!     assert_eq!(config, pool.get_default_config());
+//!     assert_eq!(config, pool.fallback_config());
 //!     assert_eq!(config, pool.get_config::<Vec<u8>>());
 //!
 //!     // Create a costum config for `Vec<u8>`.
@@ -261,8 +261,8 @@ mod tests;
 /// maximum capacity of __1_000__, the pool will store up to __2_000__ objects.
 /// The settings are intended for limiting the memory usage of the pool.
 ///
-/// The pools active default configuration will apply to all object types until you set a custom one for an object type.
-/// If you do not specify a costum default config for the pool, the pool will use the default values for [`Config`].
+/// The pools fallback configuration will apply to all object types until you set a custom one for an object type.
+/// If you do not specify a costum fallback config for the pool, the pool will use the default values for [`Config`].
 ///
 /// We allow setting a [`max`](#structfield.max) capacity of the internal pool buffer. If the buffer is full
 /// and another object gets added to the pool, the new object will get dropped.
@@ -288,13 +288,13 @@ mod tests;
 ///
 ///     assert_ne!(config, Config::default());
 ///
-///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+///     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
 ///
 ///     // Alternative:
 ///     // let mut pool = Pool::default();
-///     // pool.set_default_config(config);
+///     // pool.set_fallback_config(config);
 ///
-///     assert_eq!(config, pool.get_default_config());
+///     assert_eq!(config, pool.fallback_config());
 ///     assert_eq!(config, pool.get_config::<Vec<u8>>());
 ///
 ///     // Create a costum config for `Vec<u8>`.
@@ -373,6 +373,8 @@ impl Config {
 
 
 /// A smart pointer which automatically puts the contained object back into the [`Pool`] on drop.
+///
+/// This version is not thread-safe. For the thread-safe version take a look at [`SyncDropGuard`].
 pub struct DropGuard<T: Any> {
     inner: Option<T>,
     pool: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
@@ -380,6 +382,41 @@ pub struct DropGuard<T: Any> {
 
 impl<T: Any> DropGuard<T> {
     /// Creates a new [`DropGuard`] from an abritrary object and adds the reference to a regular [`Pool`].
+    ///
+    /// # Example
+    ///
+    /// Creating a [`DropGuard`] yourself might be usefull if you want to use objects which
+    /// you want to manually create, but where you still want to have the auto-adding to the pool
+    /// once they go out of scope.
+    ///
+    /// ```rust
+    /// use generic_pool::{Pool, DropGuard};
+    ///
+    /// struct Buffer(Vec<u8>);
+    ///
+    /// impl Buffer {
+    ///     fn len(&self) -> usize {
+    ///         self.0.len()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::default();
+    ///
+    ///     // You use buffers which have a length of exactly 1kb.
+    ///     let buffer = match pool.get_with_guard::<Buffer>() {
+    ///         Some(buffer) => buffer,
+    ///         None => DropGuard::new(Buffer(vec![0u8; 1024]), &pool),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 1024);
+    ///
+    ///     assert!(pool.get::<Buffer>().is_none());
+    ///     drop(buffer);
+    ///     let buffer = pool.get::<Buffer>().unwrap();
+    ///     assert_eq!(buffer.len(), 1024);
+    /// }
+    /// ```
     pub fn new(obj: T, pool: &Pool) -> Self {
         let inner = Some(obj);
         let pool = Rc::clone(&pool.inner);
@@ -390,8 +427,41 @@ impl<T: Any> DropGuard<T> {
     }
 
     /// Consume this guard and return the contained object.
-    pub fn into_inner(mut self) -> T {
-        self.inner.take().unwrap()
+    ///
+    /// Note that this is an associated function and not a method. See the example.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{Pool, DropGuard};
+    ///
+    /// struct Buffer(Vec<u8>);
+    ///
+    /// impl Buffer {
+    ///     fn len(&self) -> usize {
+    ///         self.0.len()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::default();
+    ///
+    ///     // You use buffers which have a length of exactly 1kb.
+    ///     let buffer = match pool.get_with_guard::<Buffer>() {
+    ///         Some(buffer) => buffer,
+    ///         None => DropGuard::new(Buffer(vec![0u8; 1024]), &pool),
+    ///     };
+    ///
+    ///     // Maybe you want to use the buffer for something else.
+    ///     let buffer: Buffer = DropGuard::into_inner(buffer);
+    ///     let mut buffer: Vec<u8> = buffer.0;
+    ///     buffer.clear();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
+    pub fn into_inner(mut guard: DropGuard<T>) -> T {
+        guard.inner.take().unwrap()
     }
 }
 
@@ -435,6 +505,8 @@ impl<T: Any> DerefMut for DropGuard<T> {
 
 
 /// A smart pointer which automatically puts the contained object back into the [`SyncPool`] on drop.
+///
+/// This version is thread-safe. For the not thread-safe version take a look at [`DropGuard`].
 pub struct SyncDropGuard<T: Any + Send + Sync> {
     inner: Option<T>,
     pool: Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>,
@@ -442,6 +514,41 @@ pub struct SyncDropGuard<T: Any + Send + Sync> {
 
 impl<T: Any + Send + Sync> SyncDropGuard<T> {
     /// Creates a new [`DropGuard`] from an abritrary object and adds the reference to a [`SyncPool`].
+    ///
+    /// # Example
+    ///
+    /// Creating a [`SyncDropGuard`] yourself might be usefull if you want to use objects which
+    /// you want to manually create, but where you still want to have the auto-adding to the pool
+    /// once they go out of scope.
+    ///
+    /// ```rust
+    /// use generic_pool::{SyncPool, SyncDropGuard};
+    ///
+    /// struct Buffer(Vec<u8>);
+    ///
+    /// impl Buffer {
+    ///     fn len(&self) -> usize {
+    ///         self.0.len()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::default();
+    ///
+    ///     // You use buffers which have a length of exactly 1kb.
+    ///     let buffer = match pool.get_with_guard::<Buffer>() {
+    ///         Some(buffer) => buffer,
+    ///         None => SyncDropGuard::new(Buffer(vec![0u8; 1024]), &pool),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 1024);
+    ///
+    ///     assert!(pool.get::<Buffer>().is_none());
+    ///     drop(buffer);
+    ///     let buffer = pool.get::<Buffer>().unwrap();
+    ///     assert_eq!(buffer.len(), 1024);
+    /// }
+    /// ```
     pub fn new(obj: T, pool: &SyncPool) -> Self {
         let inner = Some(obj);
         let pool = Arc::clone(&pool.inner);
@@ -452,8 +559,41 @@ impl<T: Any + Send + Sync> SyncDropGuard<T> {
     }
 
     /// Consume this guard and return the contained object.
-    pub fn into_inner(mut self) -> T {
-        self.inner.take().unwrap()
+    ///
+    /// Note that this is an associated function and not a method. See the example.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{SyncPool, SyncDropGuard};
+    ///
+    /// struct Buffer(Vec<u8>);
+    ///
+    /// impl Buffer {
+    ///     fn len(&self) -> usize {
+    ///         self.0.len()
+    ///     }
+    /// }
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::default();
+    ///
+    ///     // You use buffers which have a length of exactly 1kb.
+    ///     let buffer = match pool.get_with_guard::<Buffer>() {
+    ///         Some(buffer) => buffer,
+    ///         None => SyncDropGuard::new(Buffer(vec![0u8; 1024]), &pool),
+    ///     };
+    ///
+    ///     // Maybe you want to use the buffer for something else.
+    ///     let buffer: Buffer = SyncDropGuard::into_inner(buffer);
+    ///     let mut buffer: Vec<u8> = buffer.0;
+    ///     buffer.clear();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
+    pub fn into_inner(mut guard: SyncDropGuard<T>) -> T {
+        guard.inner.take().unwrap()
     }
 }
 
@@ -501,7 +641,7 @@ impl<T: Any + Send + Sync> DerefMut for SyncDropGuard<T> {
 struct PoolInner<B> {
     store: HashMap<TypeId, Vec<B>>,
     config: HashMap<TypeId, Config>,
-    default_config: Config,
+    fallback_config: Config,
 }
 
 impl<B> Default for PoolInner<B> {
@@ -509,7 +649,7 @@ impl<B> Default for PoolInner<B> {
         Self {
             store: HashMap::new(),
             config: HashMap::new(),
-            default_config: Config::default(),
+            fallback_config: Config::default(),
         }
     }
 }
@@ -520,12 +660,12 @@ impl<B> PoolInner<B> {
 
         match self.config.get(&id) {
             Some(config) => config.clone(),
-            None => self.default_config,
+            None => self.fallback_config,
         }
     }
 
-    pub fn get_default_config(&self) -> Config {
-        self.default_config
+    pub fn fallback_config(&self) -> Config {
+        self.fallback_config
     }
 
     pub fn set_config<T: Any>(&mut self, config: Config) {
@@ -534,8 +674,14 @@ impl<B> PoolInner<B> {
         self.config.insert(id, config);
     }
 
-    pub fn set_default_config(&mut self, config: Config) {
-        self.default_config = config;
+    pub fn delete_config<T: Any>(&mut self) {
+        let id = TypeId::of::<T>();
+
+        self.config.remove(&id);
+    }
+
+    pub fn set_fallback_config(&mut self, config: Config) {
+        self.fallback_config = config;
     }
 
     pub fn get<T: Any>(&mut self) -> Option<B> {
@@ -553,7 +699,7 @@ impl<B> PoolInner<B> {
 
         let config = match self.config.get(&id) {
             Some(config) => config,
-            None => &self.default_config,
+            None => &self.fallback_config,
         };
 
         match self.store.get_mut(&id) {
@@ -574,6 +720,8 @@ impl<B> PoolInner<B> {
 
 
 /// A pool that allows storing abritrary objects.
+///
+/// This version is not thread-safe. For the thread-safe version take a look at [`SyncPool`].
 #[derive(Default)]
 pub struct Pool {
     pub(crate) inner: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
@@ -589,7 +737,25 @@ impl Clone for Pool {
 }
 
 impl Pool {
-    /// Create a new [`Pool`] with the provided default [`Config`].
+    /// Creates a new [`Pool`] with the default fallback configuration.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{Pool, Config};
+    ///
+    /// fn main() {
+    ///     let pool = Pool::new();
+    ///     // Equivalent:
+    ///     // let pool = Pool::default();
+    ///
+    ///     assert_eq!(pool.fallback_config(), Config::default());
+    /// }
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new [`Pool`] with the provided [`Config`] as the fallback configuration.
     ///
     /// # Example
     /// ```rust
@@ -605,22 +771,22 @@ impl Pool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
     ///
-    ///     assert_eq!(config, pool.get_default_config());
+    ///     assert_eq!(config, pool.fallback_config());
     /// }
     /// ```
-    pub fn with_default_config(config: Config) -> Self {
+    pub fn with_fallback_config(config: Config) -> Self {
         let mut pool = Self::default();
-        pool.set_default_config(config);
+        pool.set_fallback_config(config);
 
         pool
     }
 
     /// Retrieve the currently active [`Config`] for the provided object type.
     ///
-    /// If you have not yet manually set a [`Config`] for the provided object type, this method
-    /// will return the active default configuration.
+    /// If you have not manually set a [`Config`] for the provided object type, this method
+    /// will return the fallback configuration.
     ///
     /// # Example
     /// ```rust
@@ -639,19 +805,19 @@ impl Pool {
     ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
     ///
     ///     // Retrieve the config for `Vec<u8>`.
-    ///     // We would get back the active default config without the line above.
+    ///     // We would get back the fallback config without the line above.
     ///     let config_compare = pool.get_config::<Vec<u8>>();
     ///
     ///     assert_eq!(config_compare, config);
-    ///     assert_ne!(config_compare, pool.get_default_config());
+    ///     assert_ne!(config_compare, pool.fallback_config());
     /// }
     /// ```
     pub fn get_config<T: Any>(&self) -> Config {
         self.inner.borrow().get_config::<T>()
     }
 
-    /// Retrieve the currently active default [`Config`] for all object types which do not have
-    /// a specific [`Config`] yet.
+    /// Retrieve the fallback [`Config`] for all object types which do not have
+    /// a specific [`Config`] set.
     ///
     /// # Example
     /// ```rust
@@ -667,13 +833,13 @@ impl Pool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = Pool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
     ///
-    ///     assert_eq!(config, pool.get_default_config());
+    ///     assert_eq!(config, pool.fallback_config());
     /// }
     /// ```
-    pub fn get_default_config(&self) -> Config {
-        self.inner.borrow().default_config
+    pub fn fallback_config(&self) -> Config {
+        self.inner.borrow().fallback_config
     }
 
     /// Update the [`Config`] for the provided object type.
@@ -695,19 +861,23 @@ impl Pool {
     ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
     ///
     ///     // Retrieve the config for `Vec<u8>`.
-    ///     // We would get back the active default config without the line above.
+    ///     // We would get back the fallback config without the line above.
     ///     let config_compare = pool.get_config::<Vec<u8>>();
     ///
     ///     assert_eq!(config_compare, config);
-    ///     assert_ne!(config_compare, pool.get_default_config());
+    ///     assert_ne!(config_compare, pool.fallback_config());
     /// }
     /// ```
     pub fn set_config<T: Any>(&mut self, config: Config) {
         self.inner.borrow_mut().set_config::<T>(config);
     }
 
-    pub fn set_default_config(&mut self, config: Config) {
-        self.inner.borrow_mut().default_config = config;
+    pub fn delete_config<T: Any>(&mut self) {
+        self.inner.borrow_mut().delete_config::<T>();
+    }
+
+    pub fn set_fallback_config(&mut self, config: Config) {
+        self.inner.borrow_mut().fallback_config = config;
     }
 
     pub fn get<T: Any>(&mut self) -> Option<T> {
@@ -752,6 +922,8 @@ impl Pool {
 
 
 /// A thread-safe pool that allows storing abritrary objects.
+///
+/// This version is thread-safe. For the not thread-safe version take a look at [`Pool`].
 #[derive(Default)]
 pub struct SyncPool {
     pub(crate) inner: Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>,
@@ -767,7 +939,25 @@ impl Clone for SyncPool {
 }
 
 impl SyncPool {
-    /// Create a new [`SyncPool`] with the provided default [`Config`].
+    /// Creates a new [`SyncPool`] with the default fallback configuration.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{SyncPool, Config};
+    ///
+    /// fn main() {
+    ///     let pool = SyncPool::new();
+    ///     // Equivalent:
+    ///     // let pool = SyncPool::default();
+    ///
+    ///     assert_eq!(pool.fallback_config(), Config::default());
+    /// }
+    /// ```
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new [`SyncPool`] with the provided [`Config`] as the fallback configuration.
     ///
     /// # Example
     /// ```rust
@@ -783,22 +973,22 @@ impl SyncPool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = SyncPool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = SyncPool::with_fallback_config(config); // NOTE Config implements Copy.
     ///
-    ///     assert_eq!(config, pool.get_default_config());
+    ///     assert_eq!(config, pool.fallback_config());
     /// }
     /// ```
-    pub fn with_default_config(config: Config) -> Self {
+    pub fn with_fallback_config(config: Config) -> Self {
         let mut pool = Self::default();
-        pool.set_default_config(config);
+        pool.set_fallback_config(config);
 
         pool
     }
 
     /// Retrieve the currently active [`Config`] for the provided object type.
     ///
-    /// If you have not yet manually set a [`Config`] for the provided object type, this method
-    /// will return the active default configuration.
+    /// If you have not manually set a [`Config`] for the provided object type, this method
+    /// will return the fallback configuration.
     ///
     /// # Example
     /// ```rust
@@ -817,11 +1007,11 @@ impl SyncPool {
     ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
     ///
     ///     // Retrieve the config for `Vec<u8>`.
-    ///     // We would get back the active default config without the line above.
+    ///     // We would get back the fallback config without the line above.
     ///     let config_compare = pool.get_config::<Vec<u8>>();
     ///
     ///     assert_eq!(config_compare, config);
-    ///     assert_ne!(config_compare, pool.get_default_config());
+    ///     assert_ne!(config_compare, pool.fallback_config());
     /// }
     /// ```
     pub fn get_config<T: Any + Send + Sync>(&mut self) -> Config {
@@ -829,8 +1019,8 @@ impl SyncPool {
         inner.get_config::<T>()
     }
 
-    /// Retrieve the currently active default [`Config`] for all object types which do not have
-    /// a specific [`Config`] yet.
+    /// Retrieve the fallback [`Config`] for all object types which do not have
+    /// a specific [`Config`] set.
     ///
     /// # Example
     /// ```rust
@@ -846,14 +1036,14 @@ impl SyncPool {
     ///
     ///     assert_ne!(config, Config::default());
     ///
-    ///     let mut pool = SyncPool::with_default_config(config); // NOTE Config implements Copy.
+    ///     let mut pool = SyncPool::with_fallback_config(config); // NOTE Config implements Copy.
     ///
-    ///     assert_eq!(config, pool.get_default_config());
+    ///     assert_eq!(config, pool.fallback_config());
     /// }
     /// ```
-    pub fn get_default_config(&mut self) -> Config {
+    pub fn fallback_config(&self) -> Config {
         let inner = self.inner.read().unwrap();
-        inner.get_default_config()
+        inner.fallback_config()
     }
 
     /// Update the [`Config`] for the provided object type.
@@ -875,11 +1065,11 @@ impl SyncPool {
     ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
     ///
     ///     // Retrieve the config for `Vec<u8>`.
-    ///     // We would get back the active default config without the line above.
+    ///     // We would get back the fallback config without the line above.
     ///     let config_compare = pool.get_config::<Vec<u8>>();
     ///
     ///     assert_eq!(config_compare, config);
-    ///     assert_ne!(config_compare, pool.get_default_config());
+    ///     assert_ne!(config_compare, pool.fallback_config());
     /// }
     /// ```
     pub fn set_config<T: Any + Send + Sync>(&mut self, config: Config) {
@@ -887,9 +1077,14 @@ impl SyncPool {
         inner.set_config::<T>(config);
     }
 
-    pub fn set_default_config(&mut self, config: Config) {
+    pub fn delete_config<T: Any>(&mut self) {
         let mut inner = self.inner.write().unwrap();
-        inner.set_default_config(config);
+        inner.delete_config::<T>();
+    }
+
+    pub fn set_fallback_config(&mut self, config: Config) {
+        let mut inner = self.inner.write().unwrap();
+        inner.set_fallback_config(config);
     }
 
     pub fn get<T: Any + Send + Sync>(&self) -> Option<T> {
