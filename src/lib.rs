@@ -5,7 +5,9 @@
 //! and when you need them later on you just tell the pool which type of object you want. The internal implementation does all the magic of selecting the correct
 //! object type.
 //!
-//! This library is 100% pure Rust, has zero dependencies, uses no unstable or nighly only features and, most importantly, does not contain any unsafe code.
+//! This library is 100% pure Rust, uses no unstable or nighly only features and, most importantly, does not contain any unsafe code.
+//! It also has zero dependencies on default, but has an optional serde feature which enables
+//! de-/serialization of the configuration by [Serde](https://docs.serde.rs/serde/).
 //!
 //! ## Features
 //!
@@ -246,6 +248,11 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::any::{Any, TypeId};
 use std::ops::{Deref, DerefMut};
+use std::fmt;
+use std::hash::{Hash, Hasher};
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 
 
@@ -309,7 +316,8 @@ mod tests;
 ///     assert_eq!(custom_config, pool.get_config::<Vec<u8>>());
 /// }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Config {
     /// The maximum number of elements of a specific type to be hold inside the pool.
     ///
@@ -333,6 +341,12 @@ impl Default for Config {
             start: 1_000,
             step: 1_000,
         }
+    }
+}
+
+impl fmt::Display for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Config {{max: {}, start: {}, step: {}}})", self.max, self.start, self.step)
     }
 }
 
@@ -375,9 +389,52 @@ impl Config {
 /// A smart pointer which automatically puts the contained object back into the [`Pool`] on drop.
 ///
 /// This version is not thread-safe. For the thread-safe version take a look at [`SyncDropGuard`].
+#[derive(Debug)]
 pub struct DropGuard<T: Any> {
     inner: Option<T>,
     pool: Rc<RefCell<PoolInner<Box<dyn Any>>>>,
+}
+
+impl<T: Any + Clone> Clone for DropGuard<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Clone::clone(&self.inner),
+            pool: Rc::clone(&self.pool),
+        }
+    }
+}
+
+impl<T: Any + PartialEq> PartialEq for DropGuard<T> {
+    fn eq(&self, other: &DropGuard<T>) -> bool {
+        self.inner.as_ref().unwrap().eq(other.inner.as_ref().unwrap())
+    }
+}
+
+impl<T: Any + Eq> Eq for DropGuard<T> {}
+
+impl<T: Any + PartialOrd> PartialOrd for DropGuard<T> {
+    fn partial_cmp(&self, other: &DropGuard<T>) -> Option<std::cmp::Ordering> {
+        self.inner.as_ref().unwrap().partial_cmp(other.inner.as_ref().unwrap())
+    }
+}
+
+impl<T: Any + Ord> Ord for DropGuard<T> {
+    fn cmp(&self, other: &DropGuard<T>) -> std::cmp::Ordering {
+        self.inner.as_ref().unwrap().cmp(other.inner.as_ref().unwrap())
+    }
+}
+
+/// The hash value corresponds to the hash value of the contained object.
+impl<T: Any + Hash> Hash for DropGuard<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.as_ref().unwrap().hash(state);
+    }
+}
+
+impl<T: Any + fmt::Display> fmt::Display for DropGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.inner.as_ref().unwrap(), f)
+    }
 }
 
 impl<T: Any> DropGuard<T> {
@@ -512,6 +569,48 @@ pub struct SyncDropGuard<T: Any + Send + Sync> {
     pool: Arc<RwLock<PoolInner<Box<dyn Any + Send + Sync>>>>,
 }
 
+impl<T: Any + Send + Sync + Clone> Clone for SyncDropGuard<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Clone::clone(&self.inner),
+            pool: Arc::clone(&self.pool),
+        }
+    }
+}
+
+impl<T: Any + Send + Sync + PartialEq> PartialEq for SyncDropGuard<T> {
+    fn eq(&self, other: &SyncDropGuard<T>) -> bool {
+        self.inner.as_ref().unwrap().eq(other.inner.as_ref().unwrap())
+    }
+}
+
+impl<T: Any + Send + Sync + Eq> Eq for SyncDropGuard<T> {}
+
+impl<T: Any + Send + Sync + PartialOrd> PartialOrd for SyncDropGuard<T> {
+    fn partial_cmp(&self, other: &SyncDropGuard<T>) -> Option<std::cmp::Ordering> {
+        self.inner.as_ref().unwrap().partial_cmp(other.inner.as_ref().unwrap())
+    }
+}
+
+impl<T: Any + Send + Sync + Ord> Ord for SyncDropGuard<T> {
+    fn cmp(&self, other: &SyncDropGuard<T>) -> std::cmp::Ordering {
+        self.inner.as_ref().unwrap().cmp(other.inner.as_ref().unwrap())
+    }
+}
+
+/// The hash value corresponds to the hash value of the contained object.
+impl<T: Any + Send + Sync + Hash> Hash for SyncDropGuard<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.as_ref().unwrap().hash(state);
+    }
+}
+
+impl<T: Any + Send + Sync + fmt::Display> fmt::Display for SyncDropGuard<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.inner.as_ref().unwrap(), f)
+    }
+}
+
 impl<T: Any + Send + Sync> SyncDropGuard<T> {
     /// Creates a new [`DropGuard`] from an abritrary object and adds the reference to a [`SyncPool`].
     ///
@@ -638,6 +737,7 @@ impl<T: Any + Send + Sync> DerefMut for SyncDropGuard<T> {
 
 
 /// The internal structure for all pools we use. Contains all the magic implementation details.
+#[derive(Debug)]
 struct PoolInner<B> {
     /// Contains the internal buffers, with each one holding one specific object type.
     store: HashMap<TypeId, Vec<B>>,
@@ -654,6 +754,16 @@ impl<B> Default for PoolInner<B> {
             config: HashMap::new(),
             fallback_config: Config::default(),
         }
+    }
+}
+
+impl<B> fmt::Display for PoolInner<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f, "{{store: {} entries, config: {} entries, fallback_config: {}}}",
+            self.store.len(), self.config.len(),
+            self.fallback_config.to_string(),
+        )
     }
 }
 
@@ -743,6 +853,12 @@ impl Clone for Pool {
         Self {
             inner: Rc::clone(&self.inner),
         }
+    }
+}
+
+impl fmt::Display for Pool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Pool {}", self.inner.borrow().to_string())
     }
 }
 
@@ -1117,6 +1233,12 @@ impl Clone for SyncPool {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+impl fmt::Display for SyncPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SyncPool {}", self.inner.read().unwrap().to_string())
     }
 }
 

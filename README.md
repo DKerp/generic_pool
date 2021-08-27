@@ -6,7 +6,9 @@ The pool itself does not contain any generics, only the get und put methods do. 
 and when you need them later on you just tell the pool which type of object you want. The internal implementation does all the magic of selecting the correct
 object type.
 
-This library is 100% pure Rust, has zero dependencies, uses no unstable or nighly only features and, most importantly, does not contain any unsafe code.
+This library is 100% pure Rust, uses no unstable or nighly only features and, most importantly, does not contain any unsafe code.
+It also has zero dependencies on default, but has an optional serde feature which enables de-/serialization of the configuration
+by [Serde](https://docs.serde.rs/serde/).
 
 ## Features
 
