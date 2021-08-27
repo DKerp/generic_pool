@@ -9,3 +9,7 @@ repository = "https://github.com/DKerp/generic_pool"
 license = "MIT"
 keywords = ["pool", "pooling", "memory", "generics"]
 categories = ["memory-management"]
+
+
+[dependencies]
+serde = { version = "1.0", optional = true, features = ["derive"] }
