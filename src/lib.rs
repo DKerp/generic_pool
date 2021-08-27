@@ -41,7 +41,7 @@
 //!
 //! fn main() {
 //!     // Initialize the pool. Note that there is no need to specify any generic type parameters.
-//!     let mut pool = Pool::default();
+//!     let mut pool = Pool::new();
 //!
 //!     let p = Person {
 //!         name: String::from("Mark"),
@@ -97,7 +97,7 @@
 //! }
 //!
 //! fn main() {
-//!     let mut pool = Pool::default();
+//!     let mut pool = Pool::new();
 //!
 //!     /* initialize API... */
 //!
@@ -175,7 +175,7 @@
 //! }
 //!
 //! fn main() {
-//!     let mut pool = Pool::default();
+//!     let mut pool = Pool::new();
 //!
 //!     /* initialize API... */
 //!
@@ -222,7 +222,7 @@
 //!     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
 //!
 //!     // Alternative:
-//!     // let mut pool = Pool::default();
+//!     // let mut pool = Pool::new();
 //!     // pool.set_fallback_config(config);
 //!
 //!     assert_eq!(config, pool.fallback_config());
@@ -291,7 +291,7 @@ mod tests;
 ///     let mut pool = Pool::with_fallback_config(config); // NOTE Config implements Copy.
 ///
 ///     // Alternative:
-///     // let mut pool = Pool::default();
+///     // let mut pool = Pool::new();
 ///     // pool.set_fallback_config(config);
 ///
 ///     assert_eq!(config, pool.fallback_config());
@@ -401,7 +401,7 @@ impl<T: Any> DropGuard<T> {
     /// }
     ///
     /// fn main() {
-    ///     let mut pool = Pool::default();
+    ///     let mut pool = Pool::new();
     ///
     ///     // You use buffers which have a length of exactly 1kb.
     ///     let buffer = match pool.get_with_guard::<Buffer>() {
@@ -444,7 +444,7 @@ impl<T: Any> DropGuard<T> {
     /// }
     ///
     /// fn main() {
-    ///     let mut pool = Pool::default();
+    ///     let mut pool = Pool::new();
     ///
     ///     // You use buffers which have a length of exactly 1kb.
     ///     let buffer = match pool.get_with_guard::<Buffer>() {
@@ -533,7 +533,7 @@ impl<T: Any + Send + Sync> SyncDropGuard<T> {
     /// }
     ///
     /// fn main() {
-    ///     let mut pool = SyncPool::default();
+    ///     let mut pool = SyncPool::new();
     ///
     ///     // You use buffers which have a length of exactly 1kb.
     ///     let buffer = match pool.get_with_guard::<Buffer>() {
@@ -576,7 +576,7 @@ impl<T: Any + Send + Sync> SyncDropGuard<T> {
     /// }
     ///
     /// fn main() {
-    ///     let mut pool = SyncPool::default();
+    ///     let mut pool = SyncPool::new();
     ///
     ///     // You use buffers which have a length of exactly 1kb.
     ///     let buffer = match pool.get_with_guard::<Buffer>() {
@@ -639,8 +639,11 @@ impl<T: Any + Send + Sync> DerefMut for SyncDropGuard<T> {
 
 /// The internal structure for all pools we use. Contains all the magic implementation details.
 struct PoolInner<B> {
+    /// Contains the internal buffers, with each one holding one specific object type.
     store: HashMap<TypeId, Vec<B>>,
+    /// Contains the custom configuration for each specific object type, if any.
     config: HashMap<TypeId, Config>,
+    /// The default configuration for all object types which do not have a costum configuration.
     fallback_config: Config,
 }
 
@@ -655,6 +658,7 @@ impl<B> Default for PoolInner<B> {
 }
 
 impl<B> PoolInner<B> {
+    /// Retrieve the configuration for a specific object type.
     pub fn get_config<T: Any>(&self) -> Config {
         let id = TypeId::of::<T>();
 
@@ -664,26 +668,31 @@ impl<B> PoolInner<B> {
         }
     }
 
+    /// Retrieve the fallback configuration for all object types with no costum configuration set.
     pub fn fallback_config(&self) -> Config {
         self.fallback_config
     }
 
+    /// Sets the costum configuration for a specific object type.
     pub fn set_config<T: Any>(&mut self, config: Config) {
         let id = TypeId::of::<T>();
 
         self.config.insert(id, config);
     }
 
+    /// Deletes the costum configuration of a specific object type.
     pub fn delete_config<T: Any>(&mut self) {
         let id = TypeId::of::<T>();
 
         self.config.remove(&id);
     }
 
+    /// Sets the fallback configuration for all object types with no costum configuration set.
     pub fn set_fallback_config(&mut self, config: Config) {
         self.fallback_config = config;
     }
 
+    /// Tries to retrieve an instance of a specific object type from the internal buffer.
     pub fn get<T: Any>(&mut self) -> Option<B> {
         let id = TypeId::of::<T>();
 
@@ -694,6 +703,7 @@ impl<B> PoolInner<B> {
         return None
     }
 
+    /// Tries to add an instance of a specific object type into the internal buffer.
     pub fn put<T: Any>(&mut self, boxed_obj: B) {
         let id = TypeId::of::<T>();
 
@@ -793,7 +803,7 @@ impl Pool {
     /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
-    ///     let mut pool = Pool::default();
+    ///     let mut pool = Pool::new();
     ///
     ///     let config = Config {
     ///         max: 1_000,
@@ -849,7 +859,7 @@ impl Pool {
     /// use generic_pool::{Pool, Config};
     ///
     /// fn main() {
-    ///     let mut pool = Pool::default();
+    ///     let mut pool = Pool::new();
     ///
     ///     let config = Config {
     ///         max: 1_000,
@@ -872,14 +882,89 @@ impl Pool {
         self.inner.borrow_mut().set_config::<T>(config);
     }
 
+    /// Delete the costum [`Config`] for the provided object type.
+    /// Afterwards the fallback config will apply again.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{Pool, Config};
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     let config = Config {
+    ///         max: 1_000,
+    ///         step: 100,
+    ///         start: 500,
+    ///     };
+    ///
+    ///     // Set the config for `Vec<u8>`.
+    ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
+    ///
+    ///     assert_eq!(pool.get_config::<Vec<u8>>(), config);
+    ///
+    ///     // Delete the costum config. Afterwards the fallback config will apply.
+    ///     pool.delete_config::<Vec<u8>>();
+    ///
+    ///     assert_ne!(pool.get_config::<Vec<u8>>(), config);
+    ///     assert_eq!(pool.get_config::<Vec<u8>>(), pool.fallback_config());
+    /// }
+    /// ```
     pub fn delete_config<T: Any>(&mut self) {
         self.inner.borrow_mut().delete_config::<T>();
     }
 
+    /// Set the fallback [`Config`] for all object types which do not have
+    /// a specific [`Config`] set.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{Pool, Config};
+    ///
+    /// fn main() {
+    ///     // Start with the default config.
+    ///     let mut pool = Pool::new();
+    ///
+    ///     // Create a non-default config.
+    ///     let config = Config {
+    ///         max: 1_000,
+    ///         step: 100,
+    ///         start: 500,
+    ///     };
+    ///
+    ///     assert_ne!(config, pool.fallback_config());
+    ///
+    ///     pool.set_fallback_config(config);
+    ///
+    ///     assert_eq!(config, pool.fallback_config());
+    /// }
+    /// ```
     pub fn set_fallback_config(&mut self, config: Config) {
         self.inner.borrow_mut().fallback_config = config;
     }
 
+    /// Try to retrieve an object of the specified type. Will give back `None` if the there are no
+    /// objects of this type currently stored in the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::Pool;
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     let buffer = match pool.get::<Vec<u8>>() {
+    ///         Some(mut buffer) => {
+    ///             buffer.clear();
+    ///             buffer
+    ///         }
+    ///         None => Vec::new(),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
     pub fn get<T: Any>(&mut self) -> Option<T> {
         if let Some(boxed_obj) = self.inner.borrow_mut().get::<T>() {
             if let Ok(element) = boxed_obj.downcast::<T>() {
@@ -890,6 +975,22 @@ impl Pool {
         None
     }
 
+    /// Retrieve an object of the specified type. If there is no object of this type currently
+    /// stored in the pool it will create one using its [`Default`] implementation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::Pool;
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     let buffer = pool.get_or_default::<Vec<u8>>();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
     pub fn get_or_default<T: Any + Default>(&mut self) -> T {
         match self.get::<T>() {
             Some(obj) => {
@@ -901,6 +1002,40 @@ impl Pool {
         }
     }
 
+    /// Try to retrieve an object of the specified type with a drop guard. Will give back `None`
+    /// if the there are no objects of this type currently stored in the pool.
+    ///
+    /// Once the returned [`DropGuard`] - if any - goes out of scope it will automatically put
+    /// the contained object pack into the pool. Note that the object might still get dropped
+    /// by the pool if the corresponding internal buffer is full.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{Pool, DropGuard};
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     let buffer: DropGuard<Vec<u8>> = match pool.get_with_guard::<Vec<u8>>() {
+    ///         Some(mut buffer) => {
+    ///             // DropGuard is a smart pointer, so we can call Vec.clear() directly.
+    ///             buffer.clear();
+    ///             buffer
+    ///         }
+    ///         None => DropGuard::new(Vec::new(), &pool),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     // Will put the buffer back into the pool.
+    ///     drop(buffer);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_some());
+    /// }
+    /// ```
     pub fn get_with_guard<T: Any>(&mut self) -> Option<DropGuard<T>> {
         match self.get::<T>() {
             Some(obj) => Some(DropGuard::new(obj, self)),
@@ -908,12 +1043,59 @@ impl Pool {
         }
     }
 
+    /// Retrieve an object of the specified type with a drop guard. If there is no object of this type currently
+    /// stored in the pool it will create one using its [`Default`] implementation.
+    ///
+    /// Once the returned [`DropGuard`] goes out of scope it will automatically put
+    /// the contained object pack into the pool. Note that the object might still get dropped
+    /// by the pool if the corresponding internal buffer is full.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{Pool, DropGuard};
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     let buffer: DropGuard<Vec<u8>> = pool.get_or_default_with_guard::<Vec<u8>>();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     // Will put the buffer back into the pool.
+    ///     drop(buffer);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_some());
+    /// }
+    /// ```
     pub fn get_or_default_with_guard<T: Any + Default>(&mut self) -> DropGuard<T> {
         let obj = self.get_or_default::<T>();
 
         DropGuard::new(obj, self)
     }
 
+    /// Add an object to the pool. Unless the corresponding internal buffer is full, you can retrieve
+    /// it later on by calling [`Pool.get()`](#method.get) or one of its variants.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::Pool;
+    ///
+    /// fn main() {
+    ///     let mut pool = Pool::new();
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     pool.put(vec![0u8; 1024]);
+    ///
+    ///     let buffer = pool.get::<Vec<u8>>().unwrap();
+    ///
+    ///     assert_eq!(buffer.len(), 1024);
+    /// }
+    /// ```
     pub fn put<T: Any>(&mut self, obj: T) {
         let obj = Box::new(obj);
         self.inner.borrow_mut().put::<T>(obj);
@@ -995,7 +1177,7 @@ impl SyncPool {
     /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
-    ///     let mut pool = SyncPool::default();
+    ///     let mut pool = SyncPool::new();
     ///
     ///     let config = Config {
     ///         max: 1_000,
@@ -1053,7 +1235,7 @@ impl SyncPool {
     /// use generic_pool::{SyncPool, Config};
     ///
     /// fn main() {
-    ///     let mut pool = SyncPool::default();
+    ///     let mut pool = SyncPool::new();
     ///
     ///     let config = Config {
     ///         max: 1_000,
@@ -1077,16 +1259,91 @@ impl SyncPool {
         inner.set_config::<T>(config);
     }
 
+    /// Delete the costum [`Config`] for the provided object type.
+    /// Afterwards the fallback config will apply again.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{SyncPool, Config};
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     let config = Config {
+    ///         max: 1_000,
+    ///         step: 100,
+    ///         start: 500,
+    ///     };
+    ///
+    ///     // Set the config for `Vec<u8>`.
+    ///     pool.set_config::<Vec<u8>>(config); // NOTE: Config implements Copy.
+    ///
+    ///     assert_eq!(pool.get_config::<Vec<u8>>(), config);
+    ///
+    ///     // Delete the costum config. Afterwards the fallback config will apply.
+    ///     pool.delete_config::<Vec<u8>>();
+    ///
+    ///     assert_ne!(pool.get_config::<Vec<u8>>(), config);
+    ///     assert_eq!(pool.get_config::<Vec<u8>>(), pool.fallback_config());
+    /// }
+    /// ```
     pub fn delete_config<T: Any>(&mut self) {
         let mut inner = self.inner.write().unwrap();
         inner.delete_config::<T>();
     }
 
+    /// Set the fallback [`Config`] for all object types which do not have
+    /// a specific [`Config`] set.
+    ///
+    /// # Example
+    /// ```rust
+    /// use generic_pool::{SyncPool, Config};
+    ///
+    /// fn main() {
+    ///     // Start with the default config.
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     // Create a non-default config.
+    ///     let config = Config {
+    ///         max: 1_000,
+    ///         step: 100,
+    ///         start: 500,
+    ///     };
+    ///
+    ///     assert_ne!(config, pool.fallback_config());
+    ///
+    ///     pool.set_fallback_config(config);
+    ///
+    ///     assert_eq!(config, pool.fallback_config());
+    /// }
+    /// ```
     pub fn set_fallback_config(&mut self, config: Config) {
         let mut inner = self.inner.write().unwrap();
         inner.set_fallback_config(config);
     }
 
+    /// Try to retrieve an object of the specified type. Will give back `None` if the there are no
+    /// objects of this type currently stored in the pool.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::SyncPool;
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     let buffer = match pool.get::<Vec<u8>>() {
+    ///         Some(mut buffer) => {
+    ///             buffer.clear();
+    ///             buffer
+    ///         }
+    ///         None => Vec::new(),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
     pub fn get<T: Any + Send + Sync>(&self) -> Option<T> {
         let mut inner = self.inner.write().unwrap();
         if let Some(boxed_obj) = inner.get::<T>() {
@@ -1098,6 +1355,22 @@ impl SyncPool {
         None
     }
 
+    /// Retrieve an object of the specified type. If there is no object of this type currently
+    /// stored in the pool it will create one using its [`Default`] implementation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::SyncPool;
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     let buffer = pool.get_or_default::<Vec<u8>>();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    /// }
+    /// ```
     pub fn get_or_default<T: Any + Send + Sync + Default>(&self) -> T {
         match self.get::<T>() {
             Some(obj) => {
@@ -1109,6 +1382,40 @@ impl SyncPool {
         }
     }
 
+    /// Try to retrieve an object of the specified type with a drop guard. Will give back `None`
+    /// if the there are no objects of this type currently stored in the pool.
+    ///
+    /// Once the returned [`SyncDropGuard`] - if any - goes out of scope it will automatically put
+    /// the contained object pack into the pool. Note that the object might still get dropped
+    /// by the pool if the corresponding internal buffer is full.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{SyncPool, SyncDropGuard};
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     let buffer: SyncDropGuard<Vec<u8>> = match pool.get_with_guard::<Vec<u8>>() {
+    ///         Some(mut buffer) => {
+    ///             // DropGuard is a smart pointer, so we can call Vec.clear() directly.
+    ///             buffer.clear();
+    ///             buffer
+    ///         }
+    ///         None => SyncDropGuard::new(Vec::new(), &pool),
+    ///     };
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     // Will put the buffer back into the pool.
+    ///     drop(buffer);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_some());
+    /// }
+    /// ```
     pub fn get_with_guard<T: Any + Send + Sync>(&mut self) -> Option<SyncDropGuard<T>> {
         match self.get::<T>() {
             Some(obj) => Some(SyncDropGuard::new(obj, self)),
@@ -1116,12 +1423,59 @@ impl SyncPool {
         }
     }
 
+    /// Retrieve an object of the specified type with a drop guard. If there is no object of this type currently
+    /// stored in the pool it will create one using its [`Default`] implementation.
+    ///
+    /// Once the returned [`SyncDropGuard`] goes out of scope it will automatically put
+    /// the contained object pack into the pool. Note that the object might still get dropped
+    /// by the pool if the corresponding internal buffer is full.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::{SyncPool, SyncDropGuard};
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     let buffer: SyncDropGuard<Vec<u8>> = pool.get_or_default_with_guard::<Vec<u8>>();
+    ///
+    ///     assert_eq!(buffer.len(), 0);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     // Will put the buffer back into the pool.
+    ///     drop(buffer);
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_some());
+    /// }
+    /// ```
     pub fn get_or_default_with_guard<T: Any + Send + Sync + Default>(&mut self) -> SyncDropGuard<T> {
         let obj = self.get_or_default::<T>();
 
         SyncDropGuard::new(obj, self)
     }
 
+    /// Add an object to the pool. Unless the corresponding internal buffer is full, you can retrieve
+    /// it later on by calling [`SyncPool.get()`](#method.get) or one of its variants.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use generic_pool::SyncPool;
+    ///
+    /// fn main() {
+    ///     let mut pool = SyncPool::new();
+    ///
+    ///     assert!(pool.get::<Vec<u8>>().is_none());
+    ///
+    ///     pool.put(vec![0u8; 1024]);
+    ///
+    ///     let buffer = pool.get::<Vec<u8>>().unwrap();
+    ///
+    ///     assert_eq!(buffer.len(), 1024);
+    /// }
+    /// ```
     pub fn put<T: Any + Send + Sync>(&self, obj: T) {
         let obj = Box::new(obj);
         let mut inner = self.inner.write().unwrap();
