@@ -7,7 +7,7 @@
 //!
 //! This library is 100% pure Rust, uses no unstable or nighly only features and, most importantly, does not contain any unsafe code.
 //! It also has zero dependencies on default, but has an optional serde feature which enables
-//! de-/serialization of the configuration by [`Serde`](https://docs.serde.rs/serde/).
+//! de-/serialization of the configuration by [Serde](https://docs.serde.rs/serde/).
 //!
 //! ## Features
 //!
