@@ -1,4 +1,9 @@
 # generic_pool
+
+[![Crates.io](https://img.shields.io/crates/v/generic_pool)](https://crates.io/crates/generic_pool)
+[![docs.rs](https://img.shields.io/docsrs/generic-pool)](https://docs.rs/generic-pool)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/DKerp/generic_pool/blob/main/LICENSE)
+
 A pool for recycling allocated objects for later reuse. Uses generic get/put methods so you can store (almost) any type in a single pool instance.
 
 The main advantage of this library compared to other pools is that it can store and retrieve an __abritrary__ number of __different objects__ seemlessly.
